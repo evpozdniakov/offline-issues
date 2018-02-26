@@ -3,11 +3,18 @@ var fs = require('fs')
 var request = require('request')
 
 var runParallel = require('run-parallel')
+var runSeries = require('run-series')
 var writemarkdown = require('./writemarkdown.js')
 var writehtml = require('./writehtml.js')
 
 var base = 'https://api.github.com'
 var headers = {'user-agent': 'offline-issues module'}
+
+const dateInterval = [
+  new Date('2016-07-01'),
+  new Date('2017-06-30'),
+];
+
 
 module.exports = function (token, options, cb) {
   var issueData = []
@@ -45,7 +52,7 @@ module.exports = function (token, options, cb) {
         getIssues(repo, cb)
       }
     })
-    runParallel(functionsToDo, function (err) {
+    runSeries(functionsToDo, function (err) {
       if (err) return cb(err, 'Error running in parallel.')
       writeData(options, cb)
     })
@@ -68,12 +75,15 @@ module.exports = function (token, options, cb) {
       if (err) return cb(err, 'Error in request for issue.')
       if (body.message) return cb(null, body)
       if (body.length === 0) {
-        var functionsToDo = allIssues.map(function (issue) {
+        console.log('=== found issues count:', allIssues.length)
+        var functionsToDo = allIssues
+        .filter(issue => insideDateInterval(new Date(issue.closed_at)))
+        .map(function (issue) {
           return function (cb) {
             loadIssue(issue, repo, cb)
           }
         })
-        runParallel(functionsToDo, cb)
+        runSeries(functionsToDo, cb)
         return
       } else {
         if (body.message) return cb(null, body)
@@ -114,34 +124,59 @@ module.exports = function (token, options, cb) {
     } else {
       url = base + '/repos/' + repo.user + '/' + repo.name + '/issues/' + repo.issue + '/comments'
     }
+
     request(url, { json: true, headers: headers }, function (err, resp, body) {
       if (err) return cb(err, 'Error in request for comments.')
 
+      // var includeIssue = false;
+
+      const issueCreatedAt = new Date(issue.created_at);
+
+      // if (insideDateInterval(issueCreatedAt)) {
+      //   includeIssue = true;
+      // }
+
       issue.comments = body
       issue.comments.forEach(function (comment) {
+        // if (!includeIssue && insideDateInterval(new Date(comment.created_at))) {
+        //   includeIssue = true;
+        // }
         comment.created_at = new Date(comment.created_at).toLocaleDateString()
       })
-      issueData.push(issue)
-      cb()
+
+      // if (includeIssue) {
+        issueData.push(issue)
+      // }
+
+      console.log('=== wait 100')
+
+      setTimeout(cb, 100)
     })
   }
 
   function writeData (options, cb) {
     var data = JSON.stringify(issueData, null, ' ')
     var count = JSON.parse(data).length
+    console.log('=== count:', count)
 
-    if (count > 250) {
+    /*if (count > 250) {
       console.log('Only processing the first 250 issues.')
       var limit = 250
       var excess = count - limit
       var newData = JSON.parse(data).splice(excess, 250)
       data = JSON.stringify(newData)
-    }
+    }*/
 
     fs.writeFile('comments.json', data, function (err) {
       if (err) return cb(err, 'Error in writing data file.')
       writemarkdown(options, cb)
       writehtml(options, cb)
     })
+  }
+
+  function insideDateInterval(date) {
+    const bool = date >= dateInterval[0] && date <= dateInterval[1];
+    // console.log('=== ============== ', date, bool ? 'included' : 'excluded')
+    return bool;
   }
 }
